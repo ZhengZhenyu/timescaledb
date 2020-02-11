@@ -1,0 +1,1005 @@
+-- This file and its contents are licensed under the Timescale License.
+-- Please see the included NOTICE for copyright information and
+-- LICENSE-TIMESCALE for a copy of the license.
+CREATE TABLE test_table(time INT, dev INT, val INT);
+INSERT INTO test_table SELECT t, d, random() FROM generate_series(1, 1000) t, generate_series(1, 10) d;
+INSERT INTO test_table VALUES (NULL, 0, -1), (0, NULL, -1);
+CREATE INDEX ON test_table(dev);
+CREATE INDEX ON test_table(dev NULLS FIRST);
+CREATE INDEX ON test_table(dev, time);
+CREATE TABLE test_ht(time INT, dev INT, val INT);
+SELECT create_hypertable('test_ht', 'time', chunk_time_interval => 250);
+NOTICE:  adding not-null constraint to column "time"
+  create_hypertable   
+----------------------
+ (1,public,test_ht,t)
+(1 row)
+
+INSERT INTO test_ht SELECT t, d, random() FROM generate_series(1, 1000) t, generate_series(1, 10) d;
+INSERT INTO test_ht VALUES (0, NULL, -1);
+CREATE INDEX ON test_ht(dev);
+CREATE INDEX ON test_ht(dev NULLS FIRST);
+CREATE INDEX ON test_ht(dev, time);
+\set PREFIX 'EXPLAIN (COSTS OFF)'
+\ir include/skip_scan_test_query.sql
+-- This file and its contents are licensed under the Timescale License.
+-- Please see the included NOTICE for copyright information and
+-- LICENSE-TIMESCALE for a copy of the license.
+-- SkipSkan over IndexScan
+:PREFIX SELECT time, dev, val, 'a' FROM (SELECT DISTINCT ON (dev) * FROM test_table) a;
+                             QUERY PLAN                             
+--------------------------------------------------------------------
+ Subquery Scan on a
+   ->  Custom Scan (SkipScan) on test_table
+         ->  Index Scan using test_table_dev_time_idx on test_table
+               Index Cond: (dev > NULL::integer)
+(4 rows)
+
+-- SkipSkan over IndexOnlyScan
+:PREFIX SELECT NULL, dev, NULL, 'b' FROM (SELECT DISTINCT ON (dev) dev FROM test_table) a;
+                               QUERY PLAN                                
+-------------------------------------------------------------------------
+ Subquery Scan on a
+   ->  Custom Scan (SkipScan) on test_table
+         ->  Index Only Scan using test_table_dev_time_idx on test_table
+               Index Cond: (dev > NULL::integer)
+(4 rows)
+
+:PREFIX SELECT time, dev, NULL, 'c' FROM (SELECT DISTINCT ON (dev) dev, time FROM test_table) a;
+                               QUERY PLAN                                
+-------------------------------------------------------------------------
+ Subquery Scan on a
+   ->  Custom Scan (SkipScan) on test_table
+         ->  Index Only Scan using test_table_dev_time_idx on test_table
+               Index Cond: (dev > NULL::integer)
+(4 rows)
+
+-- SkipSkan with NULLS FIRST
+:PREFIX SELECT time, dev, val, 'd' FROM (SELECT DISTINCT ON (dev) * FROM test_table ORDER BY dev NULLS FIRST) a;
+                           QUERY PLAN                           
+----------------------------------------------------------------
+ Subquery Scan on a
+   ->  Custom Scan (SkipScan) on test_table
+         ->  Index Scan using test_table_dev_idx1 on test_table
+               Index Cond: (dev > NULL::integer)
+(4 rows)
+
+:PREFIX SELECT NULL, dev, NULL, 'e' FROM (SELECT DISTINCT ON (dev) dev FROM test_table ORDER BY dev NULLS FIRST) a;
+                             QUERY PLAN                              
+---------------------------------------------------------------------
+ Subquery Scan on a
+   ->  Custom Scan (SkipScan) on test_table
+         ->  Index Only Scan using test_table_dev_idx1 on test_table
+               Index Cond: (dev > NULL::integer)
+(4 rows)
+
+:PREFIX SELECT time, dev, NULL, 'f' FROM (SELECT DISTINCT ON (dev) dev, time FROM test_table ORDER BY dev NULLS FIRST) a;
+                           QUERY PLAN                           
+----------------------------------------------------------------
+ Subquery Scan on a
+   ->  Custom Scan (SkipScan) on test_table
+         ->  Index Scan using test_table_dev_idx1 on test_table
+               Index Cond: (dev > NULL::integer)
+(4 rows)
+
+-- ORDER BY
+:PREFIX SELECT time, dev, val, 'oba' FROM (SELECT DISTINCT ON (dev) * FROM test_table ORDER BY dev, time) a;
+                             QUERY PLAN                             
+--------------------------------------------------------------------
+ Subquery Scan on a
+   ->  Custom Scan (SkipScan) on test_table
+         ->  Index Scan using test_table_dev_time_idx on test_table
+               Index Cond: (dev > NULL::integer)
+(4 rows)
+
+:PREFIX SELECT time, dev, val, 'obd' FROM (SELECT DISTINCT ON (dev) * FROM test_table ORDER BY dev DESC, time DESC) a;
+                                 QUERY PLAN                                  
+-----------------------------------------------------------------------------
+ Subquery Scan on a
+   ->  Custom Scan (SkipScan) on test_table
+         ->  Index Scan Backward using test_table_dev_time_idx on test_table
+               Index Cond: (dev < NULL::integer)
+(4 rows)
+
+-- WHERE CLAUSES
+:PREFIX SELECT time, dev, val, 'g' FROM (SELECT DISTINCT ON (dev) * FROM test_table WHERE dev > 5) a;
+                             QUERY PLAN                             
+--------------------------------------------------------------------
+ Subquery Scan on a
+   ->  Custom Scan (SkipScan) on test_table
+         ->  Index Scan using test_table_dev_time_idx on test_table
+               Index Cond: ((dev > NULL::integer) AND (dev > 5))
+(4 rows)
+
+:PREFIX SELECT time, dev, val, 'h' FROM (SELECT DISTINCT ON (dev) * FROM test_table WHERE time > 5) a;
+                             QUERY PLAN                             
+--------------------------------------------------------------------
+ Subquery Scan on a
+   ->  Custom Scan (SkipScan) on test_table
+         ->  Index Scan using test_table_dev_time_idx on test_table
+               Index Cond: ((dev > NULL::integer) AND ("time" > 5))
+(4 rows)
+
+:PREFIX SELECT time, dev, val, 'i' FROM (SELECT DISTINCT ON (dev) * FROM test_table WHERE val > 5) a;
+                             QUERY PLAN                             
+--------------------------------------------------------------------
+ Subquery Scan on a
+   ->  Custom Scan (SkipScan) on test_table
+         ->  Index Scan using test_table_dev_time_idx on test_table
+               Index Cond: (dev > NULL::integer)
+               Filter: (val > 5)
+(5 rows)
+
+:PREFIX SELECT NULL, dev, NULL, 'j' FROM (SELECT DISTINCT ON (dev) dev FROM test_table WHERE dev > 5) a;
+                               QUERY PLAN                                
+-------------------------------------------------------------------------
+ Subquery Scan on a
+   ->  Custom Scan (SkipScan) on test_table
+         ->  Index Only Scan using test_table_dev_time_idx on test_table
+               Index Cond: ((dev > NULL::integer) AND (dev > 5))
+(4 rows)
+
+:PREFIX SELECT NULL, dev, NULL, 'k' FROM (SELECT DISTINCT ON (dev) dev FROM test_table WHERE time > 5) a;
+                               QUERY PLAN                                
+-------------------------------------------------------------------------
+ Subquery Scan on a
+   ->  Custom Scan (SkipScan) on test_table
+         ->  Index Only Scan using test_table_dev_time_idx on test_table
+               Index Cond: ((dev > NULL::integer) AND ("time" > 5))
+(4 rows)
+
+:PREFIX SELECT NULL, dev, NULL, 'l' FROM (SELECT DISTINCT ON (dev) dev FROM test_table WHERE val > 5) a;
+                             QUERY PLAN                             
+--------------------------------------------------------------------
+ Subquery Scan on a
+   ->  Custom Scan (SkipScan) on test_table
+         ->  Index Scan using test_table_dev_time_idx on test_table
+               Index Cond: (dev > NULL::integer)
+               Filter: (val > 5)
+(5 rows)
+
+:PREFIX SELECT time, dev, val, 'm' FROM (SELECT DISTINCT ON (dev) * FROM test_table WHERE dev != 5) a;
+                             QUERY PLAN                             
+--------------------------------------------------------------------
+ Subquery Scan on a
+   ->  Custom Scan (SkipScan) on test_table
+         ->  Index Scan using test_table_dev_time_idx on test_table
+               Index Cond: (dev > NULL::integer)
+               Filter: (dev <> 5)
+(5 rows)
+
+:PREFIX SELECT time, dev, val, 'n' FROM (SELECT DISTINCT ON (dev) * FROM test_table WHERE time != 5) a;
+                             QUERY PLAN                             
+--------------------------------------------------------------------
+ Subquery Scan on a
+   ->  Custom Scan (SkipScan) on test_table
+         ->  Index Scan using test_table_dev_time_idx on test_table
+               Index Cond: (dev > NULL::integer)
+               Filter: ("time" <> 5)
+(5 rows)
+
+:PREFIX SELECT time, dev, val, 'o' FROM (SELECT DISTINCT ON (dev) * FROM test_table WHERE val != 5) a;
+                             QUERY PLAN                             
+--------------------------------------------------------------------
+ Subquery Scan on a
+   ->  Custom Scan (SkipScan) on test_table
+         ->  Index Scan using test_table_dev_time_idx on test_table
+               Index Cond: (dev > NULL::integer)
+               Filter: (val <> 5)
+(5 rows)
+
+:PREFIX SELECT time, dev, val, 'p' FROM (SELECT DISTINCT ON (dev) * FROM test_table WHERE dev >= 1 + 1) a;
+                             QUERY PLAN                             
+--------------------------------------------------------------------
+ Subquery Scan on a
+   ->  Custom Scan (SkipScan) on test_table
+         ->  Index Scan using test_table_dev_time_idx on test_table
+               Index Cond: ((dev > NULL::integer) AND (dev >= 2))
+(4 rows)
+
+-- ReScan tests
+:PREFIX SELECT time, dev, val, 'q' FROM (SELECT DISTINCT ON (dev) * FROM (
+    VALUES (1), (2)) a(v),
+    LATERAL (SELECT * FROM test_table WHERE time != a.v) b) a;
+                                QUERY PLAN                                
+--------------------------------------------------------------------------
+ Subquery Scan on a
+   ->  Unique
+         ->  Nested Loop
+               Join Filter: (test_table."time" <> "*VALUES*".column1)
+               ->  Index Scan using test_table_dev_time_idx on test_table
+               ->  Materialize
+                     ->  Values Scan on "*VALUES*"
+(7 rows)
+
+:PREFIX SELECT time, dev, val, 'r' FROM (SELECT * FROM (
+    VALUES (1), (2)) a(v),
+    LATERAL (SELECT DISTINCT ON (dev) * FROM test_table WHERE dev != a.v) b) a;
+                             QUERY PLAN                             
+--------------------------------------------------------------------
+ Nested Loop
+   ->  Values Scan on "*VALUES*"
+   ->  Custom Scan (SkipScan) on test_table
+         ->  Index Scan using test_table_dev_time_idx on test_table
+               Index Cond: (dev > NULL::integer)
+               Filter: (dev <> "*VALUES*".column1)
+(6 rows)
+
+-- RuntimeKeys
+:PREFIX SELECT time, dev, val, 's' FROM (SELECT * FROM (
+    VALUES (1), (2)) a(v),
+    LATERAL (SELECT DISTINCT ON (dev) * FROM test_table WHERE dev >= a.v) b) c;
+                                    QUERY PLAN                                     
+-----------------------------------------------------------------------------------
+ Nested Loop
+   ->  Values Scan on "*VALUES*"
+   ->  Custom Scan (SkipScan) on test_table
+         ->  Index Scan using test_table_dev_time_idx on test_table
+               Index Cond: ((dev > NULL::integer) AND (dev >= "*VALUES*".column1))
+(5 rows)
+
+-- SkipSkan on later keys of an index
+:PREFIX SELECT time, NULL, NULL, 't' FROM (SELECT DISTINCT ON (time) time FROM test_table WHERE dev = 2) a;
+                               QUERY PLAN                                
+-------------------------------------------------------------------------
+ Subquery Scan on a
+   ->  Custom Scan (SkipScan) on test_table
+         ->  Index Only Scan using test_table_dev_time_idx on test_table
+               Index Cond: (("time" > NULL::integer) AND (dev = 2))
+(4 rows)
+
+:PREFIX SELECT time, dev, val, 'u' FROM (SELECT DISTINCT ON (time) * FROM test_table WHERE dev = 2) a;
+                             QUERY PLAN                             
+--------------------------------------------------------------------
+ Subquery Scan on a
+   ->  Custom Scan (SkipScan) on test_table
+         ->  Index Scan using test_table_dev_time_idx on test_table
+               Index Cond: (("time" > NULL::integer) AND (dev = 2))
+(4 rows)
+
+-- Emulate multi-column DISTINCT using multiple SkipSkans
+:PREFIX SELECT time, dev, val, 'v' FROM (SELECT b.* FROM
+    (SELECT DISTINCT ON (dev) dev FROM test_table) a,
+    LATERAL (SELECT DISTINCT ON (time) * FROM test_table WHERE dev = a.dev) b) c;
+                                   QUERY PLAN                                    
+---------------------------------------------------------------------------------
+ Nested Loop
+   ->  Custom Scan (SkipScan) on test_table
+         ->  Index Only Scan using test_table_dev_time_idx on test_table
+               Index Cond: (dev > NULL::integer)
+   ->  Custom Scan (SkipScan) on test_table test_table_1
+         ->  Index Scan using test_table_dev_time_idx on test_table test_table_1
+               Index Cond: (("time" > NULL::integer) AND (dev = test_table.dev))
+(7 rows)
+
+:PREFIX SELECT time, dev, NULL, 'w' FROM (SELECT b.* FROM
+    (SELECT DISTINCT ON (dev) dev FROM test_table) a,
+    LATERAL (SELECT DISTINCT ON (time) dev, time FROM test_table WHERE dev = a.dev) b) c;
+                                      QUERY PLAN                                      
+--------------------------------------------------------------------------------------
+ Nested Loop
+   ->  Custom Scan (SkipScan) on test_table
+         ->  Index Only Scan using test_table_dev_time_idx on test_table
+               Index Cond: (dev > NULL::integer)
+   ->  Custom Scan (SkipScan) on test_table test_table_1
+         ->  Index Only Scan using test_table_dev_time_idx on test_table test_table_1
+               Index Cond: (("time" > NULL::integer) AND (dev = test_table.dev))
+(7 rows)
+
+--------------------------
+--------------------------
+---- hypertable tests ----
+--------------------------
+--------------------------
+-- SkipSkan over IndexScan
+:PREFIX SELECT time, dev, val, 'a' FROM (SELECT DISTINCT ON (dev) * FROM test_ht) a;
+                                             QUERY PLAN                                             
+----------------------------------------------------------------------------------------------------
+ Subquery Scan on a
+   ->  Unique
+         ->  Merge Append
+               Sort Key: _hyper_1_1_chunk.dev
+               ->  Custom Scan (SkipScan) on _hyper_1_1_chunk
+                     ->  Index Scan using _hyper_1_1_chunk_test_ht_dev_time_idx on _hyper_1_1_chunk
+                           Index Cond: (dev > NULL::integer)
+               ->  Custom Scan (SkipScan) on _hyper_1_2_chunk
+                     ->  Index Scan using _hyper_1_2_chunk_test_ht_dev_time_idx on _hyper_1_2_chunk
+                           Index Cond: (dev > NULL::integer)
+               ->  Custom Scan (SkipScan) on _hyper_1_3_chunk
+                     ->  Index Scan using _hyper_1_3_chunk_test_ht_dev_time_idx on _hyper_1_3_chunk
+                           Index Cond: (dev > NULL::integer)
+               ->  Custom Scan (SkipScan) on _hyper_1_4_chunk
+                     ->  Index Scan using _hyper_1_4_chunk_test_ht_dev_time_idx on _hyper_1_4_chunk
+                           Index Cond: (dev > NULL::integer)
+               ->  Custom Scan (SkipScan) on _hyper_1_5_chunk
+                     ->  Index Scan using _hyper_1_5_chunk_test_ht_dev_time_idx on _hyper_1_5_chunk
+                           Index Cond: (dev > NULL::integer)
+(19 rows)
+
+-- SkipSkan over IndexOnlyScan
+:PREFIX SELECT NULL, dev, NULL, 'b' FROM (SELECT DISTINCT ON (dev) dev FROM test_ht) a;
+                                               QUERY PLAN                                                
+---------------------------------------------------------------------------------------------------------
+ Subquery Scan on a
+   ->  Unique
+         ->  Merge Append
+               Sort Key: _hyper_1_1_chunk.dev
+               ->  Custom Scan (SkipScan) on _hyper_1_1_chunk
+                     ->  Index Only Scan using _hyper_1_1_chunk_test_ht_dev_time_idx on _hyper_1_1_chunk
+                           Index Cond: (dev > NULL::integer)
+               ->  Custom Scan (SkipScan) on _hyper_1_2_chunk
+                     ->  Index Only Scan using _hyper_1_2_chunk_test_ht_dev_time_idx on _hyper_1_2_chunk
+                           Index Cond: (dev > NULL::integer)
+               ->  Custom Scan (SkipScan) on _hyper_1_3_chunk
+                     ->  Index Only Scan using _hyper_1_3_chunk_test_ht_dev_time_idx on _hyper_1_3_chunk
+                           Index Cond: (dev > NULL::integer)
+               ->  Custom Scan (SkipScan) on _hyper_1_4_chunk
+                     ->  Index Only Scan using _hyper_1_4_chunk_test_ht_dev_time_idx on _hyper_1_4_chunk
+                           Index Cond: (dev > NULL::integer)
+               ->  Custom Scan (SkipScan) on _hyper_1_5_chunk
+                     ->  Index Only Scan using _hyper_1_5_chunk_test_ht_dev_time_idx on _hyper_1_5_chunk
+                           Index Cond: (dev > NULL::integer)
+(19 rows)
+
+:PREFIX SELECT time, dev, NULL, 'c' FROM (SELECT DISTINCT ON (dev) dev, time FROM test_ht) a;
+                                               QUERY PLAN                                                
+---------------------------------------------------------------------------------------------------------
+ Subquery Scan on a
+   ->  Unique
+         ->  Merge Append
+               Sort Key: _hyper_1_1_chunk.dev
+               ->  Custom Scan (SkipScan) on _hyper_1_1_chunk
+                     ->  Index Only Scan using _hyper_1_1_chunk_test_ht_dev_time_idx on _hyper_1_1_chunk
+                           Index Cond: (dev > NULL::integer)
+               ->  Custom Scan (SkipScan) on _hyper_1_2_chunk
+                     ->  Index Only Scan using _hyper_1_2_chunk_test_ht_dev_time_idx on _hyper_1_2_chunk
+                           Index Cond: (dev > NULL::integer)
+               ->  Custom Scan (SkipScan) on _hyper_1_3_chunk
+                     ->  Index Only Scan using _hyper_1_3_chunk_test_ht_dev_time_idx on _hyper_1_3_chunk
+                           Index Cond: (dev > NULL::integer)
+               ->  Custom Scan (SkipScan) on _hyper_1_4_chunk
+                     ->  Index Only Scan using _hyper_1_4_chunk_test_ht_dev_time_idx on _hyper_1_4_chunk
+                           Index Cond: (dev > NULL::integer)
+               ->  Custom Scan (SkipScan) on _hyper_1_5_chunk
+                     ->  Index Only Scan using _hyper_1_5_chunk_test_ht_dev_time_idx on _hyper_1_5_chunk
+                           Index Cond: (dev > NULL::integer)
+(19 rows)
+
+-- SkipSkan with NULLS FIRST
+:PREFIX SELECT time, dev, val, 'd' FROM (SELECT DISTINCT ON (dev) * FROM test_ht ORDER BY dev NULLS FIRST) a;
+                                           QUERY PLAN                                           
+------------------------------------------------------------------------------------------------
+ Subquery Scan on a
+   ->  Unique
+         ->  Merge Append
+               Sort Key: _hyper_1_1_chunk.dev NULLS FIRST
+               ->  Custom Scan (SkipScan) on _hyper_1_1_chunk
+                     ->  Index Scan using _hyper_1_1_chunk_test_ht_dev_idx1 on _hyper_1_1_chunk
+                           Index Cond: (dev > NULL::integer)
+               ->  Custom Scan (SkipScan) on _hyper_1_2_chunk
+                     ->  Index Scan using _hyper_1_2_chunk_test_ht_dev_idx1 on _hyper_1_2_chunk
+                           Index Cond: (dev > NULL::integer)
+               ->  Custom Scan (SkipScan) on _hyper_1_3_chunk
+                     ->  Index Scan using _hyper_1_3_chunk_test_ht_dev_idx1 on _hyper_1_3_chunk
+                           Index Cond: (dev > NULL::integer)
+               ->  Custom Scan (SkipScan) on _hyper_1_4_chunk
+                     ->  Index Scan using _hyper_1_4_chunk_test_ht_dev_idx1 on _hyper_1_4_chunk
+                           Index Cond: (dev > NULL::integer)
+               ->  Custom Scan (SkipScan) on _hyper_1_5_chunk
+                     ->  Index Scan using _hyper_1_5_chunk_test_ht_dev_idx1 on _hyper_1_5_chunk
+                           Index Cond: (dev > NULL::integer)
+(19 rows)
+
+:PREFIX SELECT NULL, dev, NULL, 'e' FROM (SELECT DISTINCT ON (dev) dev FROM test_ht ORDER BY dev NULLS FIRST) a;
+                                             QUERY PLAN                                              
+-----------------------------------------------------------------------------------------------------
+ Subquery Scan on a
+   ->  Unique
+         ->  Merge Append
+               Sort Key: _hyper_1_1_chunk.dev NULLS FIRST
+               ->  Custom Scan (SkipScan) on _hyper_1_1_chunk
+                     ->  Index Only Scan using _hyper_1_1_chunk_test_ht_dev_idx1 on _hyper_1_1_chunk
+                           Index Cond: (dev > NULL::integer)
+               ->  Custom Scan (SkipScan) on _hyper_1_2_chunk
+                     ->  Index Only Scan using _hyper_1_2_chunk_test_ht_dev_idx1 on _hyper_1_2_chunk
+                           Index Cond: (dev > NULL::integer)
+               ->  Custom Scan (SkipScan) on _hyper_1_3_chunk
+                     ->  Index Only Scan using _hyper_1_3_chunk_test_ht_dev_idx1 on _hyper_1_3_chunk
+                           Index Cond: (dev > NULL::integer)
+               ->  Custom Scan (SkipScan) on _hyper_1_4_chunk
+                     ->  Index Only Scan using _hyper_1_4_chunk_test_ht_dev_idx1 on _hyper_1_4_chunk
+                           Index Cond: (dev > NULL::integer)
+               ->  Custom Scan (SkipScan) on _hyper_1_5_chunk
+                     ->  Index Only Scan using _hyper_1_5_chunk_test_ht_dev_idx1 on _hyper_1_5_chunk
+                           Index Cond: (dev > NULL::integer)
+(19 rows)
+
+:PREFIX SELECT time, dev, NULL, 'f' FROM (SELECT DISTINCT ON (dev) dev, time FROM test_ht ORDER BY dev NULLS FIRST) a;
+                                           QUERY PLAN                                           
+------------------------------------------------------------------------------------------------
+ Subquery Scan on a
+   ->  Unique
+         ->  Merge Append
+               Sort Key: _hyper_1_1_chunk.dev NULLS FIRST
+               ->  Custom Scan (SkipScan) on _hyper_1_1_chunk
+                     ->  Index Scan using _hyper_1_1_chunk_test_ht_dev_idx1 on _hyper_1_1_chunk
+                           Index Cond: (dev > NULL::integer)
+               ->  Custom Scan (SkipScan) on _hyper_1_2_chunk
+                     ->  Index Scan using _hyper_1_2_chunk_test_ht_dev_idx1 on _hyper_1_2_chunk
+                           Index Cond: (dev > NULL::integer)
+               ->  Custom Scan (SkipScan) on _hyper_1_3_chunk
+                     ->  Index Scan using _hyper_1_3_chunk_test_ht_dev_idx1 on _hyper_1_3_chunk
+                           Index Cond: (dev > NULL::integer)
+               ->  Custom Scan (SkipScan) on _hyper_1_4_chunk
+                     ->  Index Scan using _hyper_1_4_chunk_test_ht_dev_idx1 on _hyper_1_4_chunk
+                           Index Cond: (dev > NULL::integer)
+               ->  Custom Scan (SkipScan) on _hyper_1_5_chunk
+                     ->  Index Scan using _hyper_1_5_chunk_test_ht_dev_idx1 on _hyper_1_5_chunk
+                           Index Cond: (dev > NULL::integer)
+(19 rows)
+
+-- ORDER BY
+:PREFIX SELECT time, dev, val, 'oba' FROM (SELECT DISTINCT ON (dev) * FROM test_ht ORDER BY dev, time) a;
+                                             QUERY PLAN                                             
+----------------------------------------------------------------------------------------------------
+ Subquery Scan on a
+   ->  Unique
+         ->  Merge Append
+               Sort Key: _hyper_1_1_chunk.dev, _hyper_1_1_chunk."time"
+               ->  Custom Scan (SkipScan) on _hyper_1_1_chunk
+                     ->  Index Scan using _hyper_1_1_chunk_test_ht_dev_time_idx on _hyper_1_1_chunk
+                           Index Cond: (dev > NULL::integer)
+               ->  Custom Scan (SkipScan) on _hyper_1_2_chunk
+                     ->  Index Scan using _hyper_1_2_chunk_test_ht_dev_time_idx on _hyper_1_2_chunk
+                           Index Cond: (dev > NULL::integer)
+               ->  Custom Scan (SkipScan) on _hyper_1_3_chunk
+                     ->  Index Scan using _hyper_1_3_chunk_test_ht_dev_time_idx on _hyper_1_3_chunk
+                           Index Cond: (dev > NULL::integer)
+               ->  Custom Scan (SkipScan) on _hyper_1_4_chunk
+                     ->  Index Scan using _hyper_1_4_chunk_test_ht_dev_time_idx on _hyper_1_4_chunk
+                           Index Cond: (dev > NULL::integer)
+               ->  Custom Scan (SkipScan) on _hyper_1_5_chunk
+                     ->  Index Scan using _hyper_1_5_chunk_test_ht_dev_time_idx on _hyper_1_5_chunk
+                           Index Cond: (dev > NULL::integer)
+(19 rows)
+
+:PREFIX SELECT time, dev, val, 'obd' FROM (SELECT DISTINCT ON (dev) * FROM test_ht ORDER BY dev DESC, time DESC) a;
+                                                 QUERY PLAN                                                  
+-------------------------------------------------------------------------------------------------------------
+ Subquery Scan on a
+   ->  Unique
+         ->  Merge Append
+               Sort Key: _hyper_1_1_chunk.dev DESC, _hyper_1_1_chunk."time" DESC
+               ->  Custom Scan (SkipScan) on _hyper_1_1_chunk
+                     ->  Index Scan Backward using _hyper_1_1_chunk_test_ht_dev_time_idx on _hyper_1_1_chunk
+                           Index Cond: (dev < NULL::integer)
+               ->  Custom Scan (SkipScan) on _hyper_1_2_chunk
+                     ->  Index Scan Backward using _hyper_1_2_chunk_test_ht_dev_time_idx on _hyper_1_2_chunk
+                           Index Cond: (dev < NULL::integer)
+               ->  Custom Scan (SkipScan) on _hyper_1_3_chunk
+                     ->  Index Scan Backward using _hyper_1_3_chunk_test_ht_dev_time_idx on _hyper_1_3_chunk
+                           Index Cond: (dev < NULL::integer)
+               ->  Custom Scan (SkipScan) on _hyper_1_4_chunk
+                     ->  Index Scan Backward using _hyper_1_4_chunk_test_ht_dev_time_idx on _hyper_1_4_chunk
+                           Index Cond: (dev < NULL::integer)
+               ->  Custom Scan (SkipScan) on _hyper_1_5_chunk
+                     ->  Index Scan Backward using _hyper_1_5_chunk_test_ht_dev_time_idx on _hyper_1_5_chunk
+                           Index Cond: (dev < NULL::integer)
+(19 rows)
+
+-- WHERE CLAUSES
+:PREFIX SELECT time, dev, val, 'g' FROM (SELECT DISTINCT ON (dev) * FROM test_ht WHERE dev > 5) a;
+                                             QUERY PLAN                                             
+----------------------------------------------------------------------------------------------------
+ Subquery Scan on a
+   ->  Unique
+         ->  Merge Append
+               Sort Key: _hyper_1_1_chunk.dev
+               ->  Custom Scan (SkipScan) on _hyper_1_1_chunk
+                     ->  Index Scan using _hyper_1_1_chunk_test_ht_dev_time_idx on _hyper_1_1_chunk
+                           Index Cond: ((dev > NULL::integer) AND (dev > 5))
+               ->  Custom Scan (SkipScan) on _hyper_1_2_chunk
+                     ->  Index Scan using _hyper_1_2_chunk_test_ht_dev_time_idx on _hyper_1_2_chunk
+                           Index Cond: ((dev > NULL::integer) AND (dev > 5))
+               ->  Custom Scan (SkipScan) on _hyper_1_3_chunk
+                     ->  Index Scan using _hyper_1_3_chunk_test_ht_dev_time_idx on _hyper_1_3_chunk
+                           Index Cond: ((dev > NULL::integer) AND (dev > 5))
+               ->  Custom Scan (SkipScan) on _hyper_1_4_chunk
+                     ->  Index Scan using _hyper_1_4_chunk_test_ht_dev_time_idx on _hyper_1_4_chunk
+                           Index Cond: ((dev > NULL::integer) AND (dev > 5))
+               ->  Custom Scan (SkipScan) on _hyper_1_5_chunk
+                     ->  Index Scan using _hyper_1_5_chunk_test_ht_dev_time_idx on _hyper_1_5_chunk
+                           Index Cond: ((dev > NULL::integer) AND (dev > 5))
+(19 rows)
+
+:PREFIX SELECT time, dev, val, 'h' FROM (SELECT DISTINCT ON (dev) * FROM test_ht WHERE time > 5) a;
+                                             QUERY PLAN                                             
+----------------------------------------------------------------------------------------------------
+ Subquery Scan on a
+   ->  Unique
+         ->  Merge Append
+               Sort Key: _hyper_1_1_chunk.dev
+               ->  Custom Scan (SkipScan) on _hyper_1_1_chunk
+                     ->  Index Scan using _hyper_1_1_chunk_test_ht_dev_time_idx on _hyper_1_1_chunk
+                           Index Cond: ((dev > NULL::integer) AND ("time" > 5))
+               ->  Custom Scan (SkipScan) on _hyper_1_4_chunk
+                     ->  Index Scan using _hyper_1_4_chunk_test_ht_dev_time_idx on _hyper_1_4_chunk
+                           Index Cond: ((dev > NULL::integer) AND ("time" > 5))
+               ->  Custom Scan (SkipScan) on _hyper_1_2_chunk
+                     ->  Index Scan using _hyper_1_2_chunk_test_ht_dev_time_idx on _hyper_1_2_chunk
+                           Index Cond: ((dev > NULL::integer) AND ("time" > 5))
+               ->  Custom Scan (SkipScan) on _hyper_1_3_chunk
+                     ->  Index Scan using _hyper_1_3_chunk_test_ht_dev_time_idx on _hyper_1_3_chunk
+                           Index Cond: ((dev > NULL::integer) AND ("time" > 5))
+               ->  Custom Scan (SkipScan) on _hyper_1_5_chunk
+                     ->  Index Scan using _hyper_1_5_chunk_test_ht_dev_time_idx on _hyper_1_5_chunk
+                           Index Cond: ((dev > NULL::integer) AND ("time" > 5))
+(19 rows)
+
+:PREFIX SELECT time, dev, val, 'i' FROM (SELECT DISTINCT ON (dev) * FROM test_ht WHERE val > 5) a;
+                                             QUERY PLAN                                             
+----------------------------------------------------------------------------------------------------
+ Subquery Scan on a
+   ->  Unique
+         ->  Merge Append
+               Sort Key: _hyper_1_1_chunk.dev
+               ->  Custom Scan (SkipScan) on _hyper_1_1_chunk
+                     ->  Index Scan using _hyper_1_1_chunk_test_ht_dev_time_idx on _hyper_1_1_chunk
+                           Index Cond: (dev > NULL::integer)
+                           Filter: (val > 5)
+               ->  Custom Scan (SkipScan) on _hyper_1_2_chunk
+                     ->  Index Scan using _hyper_1_2_chunk_test_ht_dev_time_idx on _hyper_1_2_chunk
+                           Index Cond: (dev > NULL::integer)
+                           Filter: (val > 5)
+               ->  Custom Scan (SkipScan) on _hyper_1_3_chunk
+                     ->  Index Scan using _hyper_1_3_chunk_test_ht_dev_time_idx on _hyper_1_3_chunk
+                           Index Cond: (dev > NULL::integer)
+                           Filter: (val > 5)
+               ->  Custom Scan (SkipScan) on _hyper_1_4_chunk
+                     ->  Index Scan using _hyper_1_4_chunk_test_ht_dev_time_idx on _hyper_1_4_chunk
+                           Index Cond: (dev > NULL::integer)
+                           Filter: (val > 5)
+               ->  Custom Scan (SkipScan) on _hyper_1_5_chunk
+                     ->  Index Scan using _hyper_1_5_chunk_test_ht_dev_time_idx on _hyper_1_5_chunk
+                           Index Cond: (dev > NULL::integer)
+                           Filter: (val > 5)
+(24 rows)
+
+:PREFIX SELECT NULL, dev, NULL, 'j' FROM (SELECT DISTINCT ON (dev) dev FROM test_ht WHERE dev > 5) a;
+                                               QUERY PLAN                                                
+---------------------------------------------------------------------------------------------------------
+ Subquery Scan on a
+   ->  Unique
+         ->  Merge Append
+               Sort Key: _hyper_1_1_chunk.dev
+               ->  Custom Scan (SkipScan) on _hyper_1_1_chunk
+                     ->  Index Only Scan using _hyper_1_1_chunk_test_ht_dev_time_idx on _hyper_1_1_chunk
+                           Index Cond: ((dev > NULL::integer) AND (dev > 5))
+               ->  Custom Scan (SkipScan) on _hyper_1_2_chunk
+                     ->  Index Only Scan using _hyper_1_2_chunk_test_ht_dev_time_idx on _hyper_1_2_chunk
+                           Index Cond: ((dev > NULL::integer) AND (dev > 5))
+               ->  Custom Scan (SkipScan) on _hyper_1_3_chunk
+                     ->  Index Only Scan using _hyper_1_3_chunk_test_ht_dev_time_idx on _hyper_1_3_chunk
+                           Index Cond: ((dev > NULL::integer) AND (dev > 5))
+               ->  Custom Scan (SkipScan) on _hyper_1_4_chunk
+                     ->  Index Only Scan using _hyper_1_4_chunk_test_ht_dev_time_idx on _hyper_1_4_chunk
+                           Index Cond: ((dev > NULL::integer) AND (dev > 5))
+               ->  Custom Scan (SkipScan) on _hyper_1_5_chunk
+                     ->  Index Only Scan using _hyper_1_5_chunk_test_ht_dev_time_idx on _hyper_1_5_chunk
+                           Index Cond: ((dev > NULL::integer) AND (dev > 5))
+(19 rows)
+
+:PREFIX SELECT NULL, dev, NULL, 'k' FROM (SELECT DISTINCT ON (dev) dev FROM test_ht WHERE time > 5) a;
+                                               QUERY PLAN                                                
+---------------------------------------------------------------------------------------------------------
+ Subquery Scan on a
+   ->  Unique
+         ->  Merge Append
+               Sort Key: _hyper_1_1_chunk.dev
+               ->  Custom Scan (SkipScan) on _hyper_1_1_chunk
+                     ->  Index Only Scan using _hyper_1_1_chunk_test_ht_dev_time_idx on _hyper_1_1_chunk
+                           Index Cond: ((dev > NULL::integer) AND ("time" > 5))
+               ->  Custom Scan (SkipScan) on _hyper_1_4_chunk
+                     ->  Index Only Scan using _hyper_1_4_chunk_test_ht_dev_time_idx on _hyper_1_4_chunk
+                           Index Cond: ((dev > NULL::integer) AND ("time" > 5))
+               ->  Custom Scan (SkipScan) on _hyper_1_2_chunk
+                     ->  Index Only Scan using _hyper_1_2_chunk_test_ht_dev_time_idx on _hyper_1_2_chunk
+                           Index Cond: ((dev > NULL::integer) AND ("time" > 5))
+               ->  Custom Scan (SkipScan) on _hyper_1_3_chunk
+                     ->  Index Only Scan using _hyper_1_3_chunk_test_ht_dev_time_idx on _hyper_1_3_chunk
+                           Index Cond: ((dev > NULL::integer) AND ("time" > 5))
+               ->  Custom Scan (SkipScan) on _hyper_1_5_chunk
+                     ->  Index Only Scan using _hyper_1_5_chunk_test_ht_dev_time_idx on _hyper_1_5_chunk
+                           Index Cond: ((dev > NULL::integer) AND ("time" > 5))
+(19 rows)
+
+:PREFIX SELECT NULL, dev, NULL, 'l' FROM (SELECT DISTINCT ON (dev) dev FROM test_ht WHERE val > 5) a;
+                                             QUERY PLAN                                             
+----------------------------------------------------------------------------------------------------
+ Subquery Scan on a
+   ->  Unique
+         ->  Merge Append
+               Sort Key: _hyper_1_1_chunk.dev
+               ->  Custom Scan (SkipScan) on _hyper_1_1_chunk
+                     ->  Index Scan using _hyper_1_1_chunk_test_ht_dev_time_idx on _hyper_1_1_chunk
+                           Index Cond: (dev > NULL::integer)
+                           Filter: (val > 5)
+               ->  Custom Scan (SkipScan) on _hyper_1_2_chunk
+                     ->  Index Scan using _hyper_1_2_chunk_test_ht_dev_time_idx on _hyper_1_2_chunk
+                           Index Cond: (dev > NULL::integer)
+                           Filter: (val > 5)
+               ->  Custom Scan (SkipScan) on _hyper_1_3_chunk
+                     ->  Index Scan using _hyper_1_3_chunk_test_ht_dev_time_idx on _hyper_1_3_chunk
+                           Index Cond: (dev > NULL::integer)
+                           Filter: (val > 5)
+               ->  Custom Scan (SkipScan) on _hyper_1_4_chunk
+                     ->  Index Scan using _hyper_1_4_chunk_test_ht_dev_time_idx on _hyper_1_4_chunk
+                           Index Cond: (dev > NULL::integer)
+                           Filter: (val > 5)
+               ->  Custom Scan (SkipScan) on _hyper_1_5_chunk
+                     ->  Index Scan using _hyper_1_5_chunk_test_ht_dev_time_idx on _hyper_1_5_chunk
+                           Index Cond: (dev > NULL::integer)
+                           Filter: (val > 5)
+(24 rows)
+
+:PREFIX SELECT time, dev, val, 'm' FROM (SELECT DISTINCT ON (dev) * FROM test_ht WHERE dev != 5) a;
+                                             QUERY PLAN                                             
+----------------------------------------------------------------------------------------------------
+ Subquery Scan on a
+   ->  Unique
+         ->  Merge Append
+               Sort Key: _hyper_1_1_chunk.dev
+               ->  Custom Scan (SkipScan) on _hyper_1_1_chunk
+                     ->  Index Scan using _hyper_1_1_chunk_test_ht_dev_time_idx on _hyper_1_1_chunk
+                           Index Cond: (dev > NULL::integer)
+                           Filter: (dev <> 5)
+               ->  Custom Scan (SkipScan) on _hyper_1_2_chunk
+                     ->  Index Scan using _hyper_1_2_chunk_test_ht_dev_time_idx on _hyper_1_2_chunk
+                           Index Cond: (dev > NULL::integer)
+                           Filter: (dev <> 5)
+               ->  Custom Scan (SkipScan) on _hyper_1_3_chunk
+                     ->  Index Scan using _hyper_1_3_chunk_test_ht_dev_time_idx on _hyper_1_3_chunk
+                           Index Cond: (dev > NULL::integer)
+                           Filter: (dev <> 5)
+               ->  Custom Scan (SkipScan) on _hyper_1_4_chunk
+                     ->  Index Scan using _hyper_1_4_chunk_test_ht_dev_time_idx on _hyper_1_4_chunk
+                           Index Cond: (dev > NULL::integer)
+                           Filter: (dev <> 5)
+               ->  Custom Scan (SkipScan) on _hyper_1_5_chunk
+                     ->  Index Scan using _hyper_1_5_chunk_test_ht_dev_time_idx on _hyper_1_5_chunk
+                           Index Cond: (dev > NULL::integer)
+                           Filter: (dev <> 5)
+(24 rows)
+
+:PREFIX SELECT time, dev, val, 'n' FROM (SELECT DISTINCT ON (dev) * FROM test_ht WHERE time != 5) a;
+                                             QUERY PLAN                                             
+----------------------------------------------------------------------------------------------------
+ Subquery Scan on a
+   ->  Unique
+         ->  Merge Append
+               Sort Key: _hyper_1_1_chunk.dev
+               ->  Custom Scan (SkipScan) on _hyper_1_1_chunk
+                     ->  Index Scan using _hyper_1_1_chunk_test_ht_dev_time_idx on _hyper_1_1_chunk
+                           Index Cond: (dev > NULL::integer)
+                           Filter: ("time" <> 5)
+               ->  Custom Scan (SkipScan) on _hyper_1_2_chunk
+                     ->  Index Scan using _hyper_1_2_chunk_test_ht_dev_time_idx on _hyper_1_2_chunk
+                           Index Cond: (dev > NULL::integer)
+                           Filter: ("time" <> 5)
+               ->  Custom Scan (SkipScan) on _hyper_1_3_chunk
+                     ->  Index Scan using _hyper_1_3_chunk_test_ht_dev_time_idx on _hyper_1_3_chunk
+                           Index Cond: (dev > NULL::integer)
+                           Filter: ("time" <> 5)
+               ->  Custom Scan (SkipScan) on _hyper_1_4_chunk
+                     ->  Index Scan using _hyper_1_4_chunk_test_ht_dev_time_idx on _hyper_1_4_chunk
+                           Index Cond: (dev > NULL::integer)
+                           Filter: ("time" <> 5)
+               ->  Custom Scan (SkipScan) on _hyper_1_5_chunk
+                     ->  Index Scan using _hyper_1_5_chunk_test_ht_dev_time_idx on _hyper_1_5_chunk
+                           Index Cond: (dev > NULL::integer)
+                           Filter: ("time" <> 5)
+(24 rows)
+
+:PREFIX SELECT time, dev, val, 'o' FROM (SELECT DISTINCT ON (dev) * FROM test_ht WHERE val != 5) a;
+                                             QUERY PLAN                                             
+----------------------------------------------------------------------------------------------------
+ Subquery Scan on a
+   ->  Unique
+         ->  Merge Append
+               Sort Key: _hyper_1_1_chunk.dev
+               ->  Custom Scan (SkipScan) on _hyper_1_1_chunk
+                     ->  Index Scan using _hyper_1_1_chunk_test_ht_dev_time_idx on _hyper_1_1_chunk
+                           Index Cond: (dev > NULL::integer)
+                           Filter: (val <> 5)
+               ->  Custom Scan (SkipScan) on _hyper_1_2_chunk
+                     ->  Index Scan using _hyper_1_2_chunk_test_ht_dev_time_idx on _hyper_1_2_chunk
+                           Index Cond: (dev > NULL::integer)
+                           Filter: (val <> 5)
+               ->  Custom Scan (SkipScan) on _hyper_1_3_chunk
+                     ->  Index Scan using _hyper_1_3_chunk_test_ht_dev_time_idx on _hyper_1_3_chunk
+                           Index Cond: (dev > NULL::integer)
+                           Filter: (val <> 5)
+               ->  Custom Scan (SkipScan) on _hyper_1_4_chunk
+                     ->  Index Scan using _hyper_1_4_chunk_test_ht_dev_time_idx on _hyper_1_4_chunk
+                           Index Cond: (dev > NULL::integer)
+                           Filter: (val <> 5)
+               ->  Custom Scan (SkipScan) on _hyper_1_5_chunk
+                     ->  Index Scan using _hyper_1_5_chunk_test_ht_dev_time_idx on _hyper_1_5_chunk
+                           Index Cond: (dev > NULL::integer)
+                           Filter: (val <> 5)
+(24 rows)
+
+:PREFIX SELECT time, dev, val, 'p' FROM (SELECT DISTINCT ON (dev) * FROM test_ht WHERE dev >= 1 + 1) a;
+                                             QUERY PLAN                                             
+----------------------------------------------------------------------------------------------------
+ Subquery Scan on a
+   ->  Unique
+         ->  Merge Append
+               Sort Key: _hyper_1_1_chunk.dev
+               ->  Custom Scan (SkipScan) on _hyper_1_1_chunk
+                     ->  Index Scan using _hyper_1_1_chunk_test_ht_dev_time_idx on _hyper_1_1_chunk
+                           Index Cond: ((dev > NULL::integer) AND (dev >= 2))
+               ->  Custom Scan (SkipScan) on _hyper_1_2_chunk
+                     ->  Index Scan using _hyper_1_2_chunk_test_ht_dev_time_idx on _hyper_1_2_chunk
+                           Index Cond: ((dev > NULL::integer) AND (dev >= 2))
+               ->  Custom Scan (SkipScan) on _hyper_1_3_chunk
+                     ->  Index Scan using _hyper_1_3_chunk_test_ht_dev_time_idx on _hyper_1_3_chunk
+                           Index Cond: ((dev > NULL::integer) AND (dev >= 2))
+               ->  Custom Scan (SkipScan) on _hyper_1_4_chunk
+                     ->  Index Scan using _hyper_1_4_chunk_test_ht_dev_time_idx on _hyper_1_4_chunk
+                           Index Cond: ((dev > NULL::integer) AND (dev >= 2))
+               ->  Custom Scan (SkipScan) on _hyper_1_5_chunk
+                     ->  Index Scan using _hyper_1_5_chunk_test_ht_dev_time_idx on _hyper_1_5_chunk
+                           Index Cond: ((dev > NULL::integer) AND (dev >= 2))
+(19 rows)
+
+-- ReScan tests
+:PREFIX SELECT time, dev, val, 'q' FROM (SELECT DISTINCT ON (dev) * FROM (
+    VALUES (1), (2)) a(v),
+    LATERAL (SELECT * FROM test_ht WHERE time != a.v) b) a;
+                                             QUERY PLAN                                             
+----------------------------------------------------------------------------------------------------
+ Subquery Scan on a
+   ->  Unique
+         ->  Nested Loop
+               Join Filter: (_hyper_1_1_chunk."time" <> "*VALUES*".column1)
+               ->  Merge Append
+                     Sort Key: _hyper_1_1_chunk.dev
+                     ->  Index Scan using _hyper_1_1_chunk_test_ht_dev_time_idx on _hyper_1_1_chunk
+                     ->  Index Scan using _hyper_1_2_chunk_test_ht_dev_time_idx on _hyper_1_2_chunk
+                     ->  Index Scan using _hyper_1_3_chunk_test_ht_dev_time_idx on _hyper_1_3_chunk
+                     ->  Index Scan using _hyper_1_4_chunk_test_ht_dev_time_idx on _hyper_1_4_chunk
+                     ->  Index Scan using _hyper_1_5_chunk_test_ht_dev_time_idx on _hyper_1_5_chunk
+               ->  Materialize
+                     ->  Values Scan on "*VALUES*"
+(13 rows)
+
+:PREFIX SELECT time, dev, val, 'r' FROM (SELECT * FROM (
+    VALUES (1), (2)) a(v),
+    LATERAL (SELECT DISTINCT ON (dev) * FROM test_ht WHERE dev != a.v) b) a;
+                                             QUERY PLAN                                             
+----------------------------------------------------------------------------------------------------
+ Nested Loop
+   ->  Values Scan on "*VALUES*"
+   ->  Unique
+         ->  Merge Append
+               Sort Key: _hyper_1_1_chunk.dev
+               ->  Custom Scan (SkipScan) on _hyper_1_1_chunk
+                     ->  Index Scan using _hyper_1_1_chunk_test_ht_dev_time_idx on _hyper_1_1_chunk
+                           Index Cond: (dev > NULL::integer)
+                           Filter: (dev <> "*VALUES*".column1)
+               ->  Custom Scan (SkipScan) on _hyper_1_2_chunk
+                     ->  Index Scan using _hyper_1_2_chunk_test_ht_dev_time_idx on _hyper_1_2_chunk
+                           Index Cond: (dev > NULL::integer)
+                           Filter: (dev <> "*VALUES*".column1)
+               ->  Custom Scan (SkipScan) on _hyper_1_3_chunk
+                     ->  Index Scan using _hyper_1_3_chunk_test_ht_dev_time_idx on _hyper_1_3_chunk
+                           Index Cond: (dev > NULL::integer)
+                           Filter: (dev <> "*VALUES*".column1)
+               ->  Custom Scan (SkipScan) on _hyper_1_4_chunk
+                     ->  Index Scan using _hyper_1_4_chunk_test_ht_dev_time_idx on _hyper_1_4_chunk
+                           Index Cond: (dev > NULL::integer)
+                           Filter: (dev <> "*VALUES*".column1)
+               ->  Custom Scan (SkipScan) on _hyper_1_5_chunk
+                     ->  Index Scan using _hyper_1_5_chunk_test_ht_dev_time_idx on _hyper_1_5_chunk
+                           Index Cond: (dev > NULL::integer)
+                           Filter: (dev <> "*VALUES*".column1)
+(25 rows)
+
+-- RuntimeKeys
+:PREFIX SELECT time, dev, val, 's' FROM (SELECT * FROM (
+    VALUES (1), (2)) a(v),
+    LATERAL (SELECT DISTINCT ON (dev) * FROM test_ht WHERE dev >= a.v) b) c;
+                                             QUERY PLAN                                             
+----------------------------------------------------------------------------------------------------
+ Nested Loop
+   ->  Values Scan on "*VALUES*"
+   ->  Unique
+         ->  Merge Append
+               Sort Key: _hyper_1_1_chunk.dev
+               ->  Custom Scan (SkipScan) on _hyper_1_1_chunk
+                     ->  Index Scan using _hyper_1_1_chunk_test_ht_dev_time_idx on _hyper_1_1_chunk
+                           Index Cond: ((dev > NULL::integer) AND (dev >= "*VALUES*".column1))
+               ->  Custom Scan (SkipScan) on _hyper_1_2_chunk
+                     ->  Index Scan using _hyper_1_2_chunk_test_ht_dev_time_idx on _hyper_1_2_chunk
+                           Index Cond: ((dev > NULL::integer) AND (dev >= "*VALUES*".column1))
+               ->  Custom Scan (SkipScan) on _hyper_1_3_chunk
+                     ->  Index Scan using _hyper_1_3_chunk_test_ht_dev_time_idx on _hyper_1_3_chunk
+                           Index Cond: ((dev > NULL::integer) AND (dev >= "*VALUES*".column1))
+               ->  Custom Scan (SkipScan) on _hyper_1_4_chunk
+                     ->  Index Scan using _hyper_1_4_chunk_test_ht_dev_time_idx on _hyper_1_4_chunk
+                           Index Cond: ((dev > NULL::integer) AND (dev >= "*VALUES*".column1))
+               ->  Custom Scan (SkipScan) on _hyper_1_5_chunk
+                     ->  Index Scan using _hyper_1_5_chunk_test_ht_dev_time_idx on _hyper_1_5_chunk
+                           Index Cond: ((dev > NULL::integer) AND (dev >= "*VALUES*".column1))
+(20 rows)
+
+-- SkipSkan on later keys of an index
+:PREFIX SELECT time, NULL, NULL, 't' FROM (SELECT DISTINCT ON (time) time FROM test_ht WHERE dev = 2) a;
+                                               QUERY PLAN                                                
+---------------------------------------------------------------------------------------------------------
+ Subquery Scan on a
+   ->  Unique
+         ->  Merge Append
+               Sort Key: _hyper_1_1_chunk."time"
+               ->  Custom Scan (SkipScan) on _hyper_1_1_chunk
+                     ->  Index Only Scan using _hyper_1_1_chunk_test_ht_dev_time_idx on _hyper_1_1_chunk
+                           Index Cond: (("time" > NULL::integer) AND (dev = 2))
+               ->  Custom Scan (SkipScan) on _hyper_1_2_chunk
+                     ->  Index Only Scan using _hyper_1_2_chunk_test_ht_dev_time_idx on _hyper_1_2_chunk
+                           Index Cond: (("time" > NULL::integer) AND (dev = 2))
+               ->  Custom Scan (SkipScan) on _hyper_1_3_chunk
+                     ->  Index Only Scan using _hyper_1_3_chunk_test_ht_dev_time_idx on _hyper_1_3_chunk
+                           Index Cond: (("time" > NULL::integer) AND (dev = 2))
+               ->  Custom Scan (SkipScan) on _hyper_1_4_chunk
+                     ->  Index Only Scan using _hyper_1_4_chunk_test_ht_dev_time_idx on _hyper_1_4_chunk
+                           Index Cond: (("time" > NULL::integer) AND (dev = 2))
+               ->  Custom Scan (SkipScan) on _hyper_1_5_chunk
+                     ->  Index Only Scan using _hyper_1_5_chunk_test_ht_dev_time_idx on _hyper_1_5_chunk
+                           Index Cond: (("time" > NULL::integer) AND (dev = 2))
+(19 rows)
+
+:PREFIX SELECT time, dev, val, 'u' FROM (SELECT DISTINCT ON (time) * FROM test_ht WHERE dev = 2) a;
+                                             QUERY PLAN                                             
+----------------------------------------------------------------------------------------------------
+ Subquery Scan on a
+   ->  Unique
+         ->  Merge Append
+               Sort Key: _hyper_1_1_chunk."time"
+               ->  Custom Scan (SkipScan) on _hyper_1_1_chunk
+                     ->  Index Scan using _hyper_1_1_chunk_test_ht_dev_time_idx on _hyper_1_1_chunk
+                           Index Cond: (("time" > NULL::integer) AND (dev = 2))
+               ->  Custom Scan (SkipScan) on _hyper_1_2_chunk
+                     ->  Index Scan using _hyper_1_2_chunk_test_ht_dev_time_idx on _hyper_1_2_chunk
+                           Index Cond: (("time" > NULL::integer) AND (dev = 2))
+               ->  Custom Scan (SkipScan) on _hyper_1_3_chunk
+                     ->  Index Scan using _hyper_1_3_chunk_test_ht_dev_time_idx on _hyper_1_3_chunk
+                           Index Cond: (("time" > NULL::integer) AND (dev = 2))
+               ->  Custom Scan (SkipScan) on _hyper_1_4_chunk
+                     ->  Index Scan using _hyper_1_4_chunk_test_ht_dev_time_idx on _hyper_1_4_chunk
+                           Index Cond: (("time" > NULL::integer) AND (dev = 2))
+               ->  Custom Scan (SkipScan) on _hyper_1_5_chunk
+                     ->  Index Scan using _hyper_1_5_chunk_test_ht_dev_time_idx on _hyper_1_5_chunk
+                           Index Cond: (("time" > NULL::integer) AND (dev = 2))
+(19 rows)
+
+-- Emulate multi-column DISTINCT using multiple SkipSkans
+:PREFIX SELECT time, dev, val, 'v' FROM (SELECT b.* FROM
+    (SELECT DISTINCT ON (dev) dev FROM test_ht) a,
+    LATERAL (SELECT DISTINCT ON (time) * FROM test_ht WHERE dev = a.dev) b) c;
+                                                      QUERY PLAN                                                       
+-----------------------------------------------------------------------------------------------------------------------
+ Nested Loop
+   ->  Unique
+         ->  Merge Append
+               Sort Key: _hyper_1_1_chunk.dev
+               ->  Custom Scan (SkipScan) on _hyper_1_1_chunk
+                     ->  Index Only Scan using _hyper_1_1_chunk_test_ht_dev_time_idx on _hyper_1_1_chunk
+                           Index Cond: (dev > NULL::integer)
+               ->  Custom Scan (SkipScan) on _hyper_1_2_chunk
+                     ->  Index Only Scan using _hyper_1_2_chunk_test_ht_dev_time_idx on _hyper_1_2_chunk
+                           Index Cond: (dev > NULL::integer)
+               ->  Custom Scan (SkipScan) on _hyper_1_3_chunk
+                     ->  Index Only Scan using _hyper_1_3_chunk_test_ht_dev_time_idx on _hyper_1_3_chunk
+                           Index Cond: (dev > NULL::integer)
+               ->  Custom Scan (SkipScan) on _hyper_1_4_chunk
+                     ->  Index Only Scan using _hyper_1_4_chunk_test_ht_dev_time_idx on _hyper_1_4_chunk
+                           Index Cond: (dev > NULL::integer)
+               ->  Custom Scan (SkipScan) on _hyper_1_5_chunk
+                     ->  Index Only Scan using _hyper_1_5_chunk_test_ht_dev_time_idx on _hyper_1_5_chunk
+                           Index Cond: (dev > NULL::integer)
+   ->  Unique
+         ->  Merge Append
+               Sort Key: _hyper_1_1_chunk_1."time"
+               ->  Custom Scan (SkipScan) on _hyper_1_1_chunk _hyper_1_1_chunk_1
+                     ->  Index Scan using _hyper_1_1_chunk_test_ht_dev_time_idx on _hyper_1_1_chunk _hyper_1_1_chunk_1
+                           Index Cond: (("time" > NULL::integer) AND (dev = _hyper_1_1_chunk.dev))
+               ->  Custom Scan (SkipScan) on _hyper_1_2_chunk _hyper_1_2_chunk_1
+                     ->  Index Scan using _hyper_1_2_chunk_test_ht_dev_time_idx on _hyper_1_2_chunk _hyper_1_2_chunk_1
+                           Index Cond: (("time" > NULL::integer) AND (dev = _hyper_1_1_chunk.dev))
+               ->  Custom Scan (SkipScan) on _hyper_1_3_chunk _hyper_1_3_chunk_1
+                     ->  Index Scan using _hyper_1_3_chunk_test_ht_dev_time_idx on _hyper_1_3_chunk _hyper_1_3_chunk_1
+                           Index Cond: (("time" > NULL::integer) AND (dev = _hyper_1_1_chunk.dev))
+               ->  Custom Scan (SkipScan) on _hyper_1_4_chunk _hyper_1_4_chunk_1
+                     ->  Index Scan using _hyper_1_4_chunk_test_ht_dev_time_idx on _hyper_1_4_chunk _hyper_1_4_chunk_1
+                           Index Cond: (("time" > NULL::integer) AND (dev = _hyper_1_1_chunk.dev))
+               ->  Custom Scan (SkipScan) on _hyper_1_5_chunk _hyper_1_5_chunk_1
+                     ->  Index Scan using _hyper_1_5_chunk_test_ht_dev_time_idx on _hyper_1_5_chunk _hyper_1_5_chunk_1
+                           Index Cond: (("time" > NULL::integer) AND (dev = _hyper_1_1_chunk.dev))
+(37 rows)
+
+:PREFIX SELECT time, dev, NULL, 'w' FROM (SELECT b.* FROM
+    (SELECT DISTINCT ON (dev) dev FROM test_ht) a,
+    LATERAL (SELECT DISTINCT ON (time) dev, time FROM test_ht WHERE dev = a.dev) b) c;
+                                                         QUERY PLAN                                                         
+----------------------------------------------------------------------------------------------------------------------------
+ Nested Loop
+   ->  Unique
+         ->  Merge Append
+               Sort Key: _hyper_1_1_chunk.dev
+               ->  Custom Scan (SkipScan) on _hyper_1_1_chunk
+                     ->  Index Only Scan using _hyper_1_1_chunk_test_ht_dev_time_idx on _hyper_1_1_chunk
+                           Index Cond: (dev > NULL::integer)
+               ->  Custom Scan (SkipScan) on _hyper_1_2_chunk
+                     ->  Index Only Scan using _hyper_1_2_chunk_test_ht_dev_time_idx on _hyper_1_2_chunk
+                           Index Cond: (dev > NULL::integer)
+               ->  Custom Scan (SkipScan) on _hyper_1_3_chunk
+                     ->  Index Only Scan using _hyper_1_3_chunk_test_ht_dev_time_idx on _hyper_1_3_chunk
+                           Index Cond: (dev > NULL::integer)
+               ->  Custom Scan (SkipScan) on _hyper_1_4_chunk
+                     ->  Index Only Scan using _hyper_1_4_chunk_test_ht_dev_time_idx on _hyper_1_4_chunk
+                           Index Cond: (dev > NULL::integer)
+               ->  Custom Scan (SkipScan) on _hyper_1_5_chunk
+                     ->  Index Only Scan using _hyper_1_5_chunk_test_ht_dev_time_idx on _hyper_1_5_chunk
+                           Index Cond: (dev > NULL::integer)
+   ->  Unique
+         ->  Merge Append
+               Sort Key: _hyper_1_1_chunk_1."time"
+               ->  Custom Scan (SkipScan) on _hyper_1_1_chunk _hyper_1_1_chunk_1
+                     ->  Index Only Scan using _hyper_1_1_chunk_test_ht_dev_time_idx on _hyper_1_1_chunk _hyper_1_1_chunk_1
+                           Index Cond: (("time" > NULL::integer) AND (dev = _hyper_1_1_chunk.dev))
+               ->  Custom Scan (SkipScan) on _hyper_1_2_chunk _hyper_1_2_chunk_1
+                     ->  Index Only Scan using _hyper_1_2_chunk_test_ht_dev_time_idx on _hyper_1_2_chunk _hyper_1_2_chunk_1
+                           Index Cond: (("time" > NULL::integer) AND (dev = _hyper_1_1_chunk.dev))
+               ->  Custom Scan (SkipScan) on _hyper_1_3_chunk _hyper_1_3_chunk_1
+                     ->  Index Only Scan using _hyper_1_3_chunk_test_ht_dev_time_idx on _hyper_1_3_chunk _hyper_1_3_chunk_1
+                           Index Cond: (("time" > NULL::integer) AND (dev = _hyper_1_1_chunk.dev))
+               ->  Custom Scan (SkipScan) on _hyper_1_4_chunk _hyper_1_4_chunk_1
+                     ->  Index Only Scan using _hyper_1_4_chunk_test_ht_dev_time_idx on _hyper_1_4_chunk _hyper_1_4_chunk_1
+                           Index Cond: (("time" > NULL::integer) AND (dev = _hyper_1_1_chunk.dev))
+               ->  Custom Scan (SkipScan) on _hyper_1_5_chunk _hyper_1_5_chunk_1
+                     ->  Index Only Scan using _hyper_1_5_chunk_test_ht_dev_time_idx on _hyper_1_5_chunk _hyper_1_5_chunk_1
+                           Index Cond: (("time" > NULL::integer) AND (dev = _hyper_1_1_chunk.dev))
+(37 rows)
+
+-- don't SkipSkan with an invalid ORDER BY
+:PREFIX SELECT time, dev, val, 'd' FROM (SELECT DISTINCT ON (dev) * FROM test_ht ORDER BY dev DESC, time) a;
+                                 QUERY PLAN                                 
+----------------------------------------------------------------------------
+ Subquery Scan on a
+   ->  Unique
+         ->  Sort
+               Sort Key: _hyper_1_1_chunk.dev DESC, _hyper_1_1_chunk."time"
+               ->  Append
+                     ->  Seq Scan on _hyper_1_1_chunk
+                     ->  Seq Scan on _hyper_1_2_chunk
+                     ->  Seq Scan on _hyper_1_3_chunk
+                     ->  Seq Scan on _hyper_1_4_chunk
+                     ->  Seq Scan on _hyper_1_5_chunk
+(10 rows)
+
+:PREFIX SELECT time, dev, val, 'd' FROM (SELECT DISTINCT ON (dev) * FROM test_ht ORDER BY dev, time DESC) a;
+                                 QUERY PLAN                                 
+----------------------------------------------------------------------------
+ Subquery Scan on a
+   ->  Unique
+         ->  Sort
+               Sort Key: _hyper_1_1_chunk.dev, _hyper_1_1_chunk."time" DESC
+               ->  Append
+                     ->  Seq Scan on _hyper_1_1_chunk
+                     ->  Seq Scan on _hyper_1_2_chunk
+                     ->  Seq Scan on _hyper_1_3_chunk
+                     ->  Seq Scan on _hyper_1_4_chunk
+                     ->  Seq Scan on _hyper_1_5_chunk
+(10 rows)
+

@@ -11,6 +11,8 @@ set(TEST_FILES
   continuous_aggs_watermark.sql
   dist_views.sql
   partialize_finalize.sql
+  plan_skip_scan.sql
+  skip_scan.sql
 )
 
 set(TEST_FILES_DEBUG

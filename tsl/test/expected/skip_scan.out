@@ -1,0 +1,261 @@
+-- This file and its contents are licensed under the Timescale License.
+-- Please see the included NOTICE for copyright information and
+-- LICENSE-TIMESCALE for a copy of the license.
+CREATE TABLE test_table(time INT, dev INT, val INT);
+INSERT INTO test_table SELECT t, d, random() FROM generate_series(1, 1000) t, generate_series(1, 10) d;
+INSERT INTO test_table VALUES (NULL, 0, -1), (0, NULL, -1);
+CREATE INDEX ON test_table(dev);
+CREATE INDEX ON test_table(dev NULLS FIRST);
+CREATE INDEX ON test_table(dev, time);
+CREATE TABLE skip_scan_results(idx BIGSERIAL PRIMARY KEY, time INT, dev INT, val INT, test TEXT);
+CREATE TABLE base_results(idx BIGSERIAL PRIMARY KEY, time INT, dev INT, val INT, test TEXT);
+CREATE TABLE test_ht(time INT, dev INT, val INT);
+SELECT create_hypertable('test_ht', 'time', chunk_time_interval => 250);
+NOTICE:  adding not-null constraint to column "time"
+  create_hypertable   
+----------------------
+ (1,public,test_ht,t)
+(1 row)
+
+INSERT INTO test_ht SELECT t, d, random() FROM generate_series(1, 1000) t, generate_series(1, 10) d;
+INSERT INTO test_ht VALUES (0, NULL, -1);
+CREATE INDEX ON test_ht(dev);
+CREATE INDEX ON test_ht(dev NULLS FIRST);
+CREATE INDEX ON test_ht(dev, time);
+\set PREFIX 'INSERT INTO skip_scan_results(time, dev, val, test)'
+\ir include/skip_scan_test_query.sql
+-- This file and its contents are licensed under the Timescale License.
+-- Please see the included NOTICE for copyright information and
+-- LICENSE-TIMESCALE for a copy of the license.
+-- SkipSkan over IndexScan
+:PREFIX SELECT time, dev, val, 'a' FROM (SELECT DISTINCT ON (dev) * FROM test_table) a;
+-- SkipSkan over IndexOnlyScan
+:PREFIX SELECT NULL, dev, NULL, 'b' FROM (SELECT DISTINCT ON (dev) dev FROM test_table) a;
+:PREFIX SELECT time, dev, NULL, 'c' FROM (SELECT DISTINCT ON (dev) dev, time FROM test_table) a;
+-- SkipSkan with NULLS FIRST
+:PREFIX SELECT time, dev, val, 'd' FROM (SELECT DISTINCT ON (dev) * FROM test_table ORDER BY dev NULLS FIRST) a;
+:PREFIX SELECT NULL, dev, NULL, 'e' FROM (SELECT DISTINCT ON (dev) dev FROM test_table ORDER BY dev NULLS FIRST) a;
+:PREFIX SELECT time, dev, NULL, 'f' FROM (SELECT DISTINCT ON (dev) dev, time FROM test_table ORDER BY dev NULLS FIRST) a;
+-- ORDER BY
+:PREFIX SELECT time, dev, val, 'oba' FROM (SELECT DISTINCT ON (dev) * FROM test_table ORDER BY dev, time) a;
+:PREFIX SELECT time, dev, val, 'obd' FROM (SELECT DISTINCT ON (dev) * FROM test_table ORDER BY dev DESC, time DESC) a;
+-- WHERE CLAUSES
+:PREFIX SELECT time, dev, val, 'g' FROM (SELECT DISTINCT ON (dev) * FROM test_table WHERE dev > 5) a;
+:PREFIX SELECT time, dev, val, 'h' FROM (SELECT DISTINCT ON (dev) * FROM test_table WHERE time > 5) a;
+:PREFIX SELECT time, dev, val, 'i' FROM (SELECT DISTINCT ON (dev) * FROM test_table WHERE val > 5) a;
+:PREFIX SELECT NULL, dev, NULL, 'j' FROM (SELECT DISTINCT ON (dev) dev FROM test_table WHERE dev > 5) a;
+:PREFIX SELECT NULL, dev, NULL, 'k' FROM (SELECT DISTINCT ON (dev) dev FROM test_table WHERE time > 5) a;
+:PREFIX SELECT NULL, dev, NULL, 'l' FROM (SELECT DISTINCT ON (dev) dev FROM test_table WHERE val > 5) a;
+:PREFIX SELECT time, dev, val, 'm' FROM (SELECT DISTINCT ON (dev) * FROM test_table WHERE dev != 5) a;
+:PREFIX SELECT time, dev, val, 'n' FROM (SELECT DISTINCT ON (dev) * FROM test_table WHERE time != 5) a;
+:PREFIX SELECT time, dev, val, 'o' FROM (SELECT DISTINCT ON (dev) * FROM test_table WHERE val != 5) a;
+:PREFIX SELECT time, dev, val, 'p' FROM (SELECT DISTINCT ON (dev) * FROM test_table WHERE dev >= 1 + 1) a;
+-- ReScan tests
+:PREFIX SELECT time, dev, val, 'q' FROM (SELECT DISTINCT ON (dev) * FROM (
+    VALUES (1), (2)) a(v),
+    LATERAL (SELECT * FROM test_table WHERE time != a.v) b) a;
+:PREFIX SELECT time, dev, val, 'r' FROM (SELECT * FROM (
+    VALUES (1), (2)) a(v),
+    LATERAL (SELECT DISTINCT ON (dev) * FROM test_table WHERE dev != a.v) b) a;
+-- RuntimeKeys
+:PREFIX SELECT time, dev, val, 's' FROM (SELECT * FROM (
+    VALUES (1), (2)) a(v),
+    LATERAL (SELECT DISTINCT ON (dev) * FROM test_table WHERE dev >= a.v) b) c;
+-- SkipSkan on later keys of an index
+:PREFIX SELECT time, NULL, NULL, 't' FROM (SELECT DISTINCT ON (time) time FROM test_table WHERE dev = 2) a;
+:PREFIX SELECT time, dev, val, 'u' FROM (SELECT DISTINCT ON (time) * FROM test_table WHERE dev = 2) a;
+-- Emulate multi-column DISTINCT using multiple SkipSkans
+:PREFIX SELECT time, dev, val, 'v' FROM (SELECT b.* FROM
+    (SELECT DISTINCT ON (dev) dev FROM test_table) a,
+    LATERAL (SELECT DISTINCT ON (time) * FROM test_table WHERE dev = a.dev) b) c;
+:PREFIX SELECT time, dev, NULL, 'w' FROM (SELECT b.* FROM
+    (SELECT DISTINCT ON (dev) dev FROM test_table) a,
+    LATERAL (SELECT DISTINCT ON (time) dev, time FROM test_table WHERE dev = a.dev) b) c;
+--------------------------
+--------------------------
+---- hypertable tests ----
+--------------------------
+--------------------------
+-- SkipSkan over IndexScan
+:PREFIX SELECT time, dev, val, 'a' FROM (SELECT DISTINCT ON (dev) * FROM test_ht) a;
+-- SkipSkan over IndexOnlyScan
+:PREFIX SELECT NULL, dev, NULL, 'b' FROM (SELECT DISTINCT ON (dev) dev FROM test_ht) a;
+:PREFIX SELECT time, dev, NULL, 'c' FROM (SELECT DISTINCT ON (dev) dev, time FROM test_ht) a;
+-- SkipSkan with NULLS FIRST
+:PREFIX SELECT time, dev, val, 'd' FROM (SELECT DISTINCT ON (dev) * FROM test_ht ORDER BY dev NULLS FIRST) a;
+:PREFIX SELECT NULL, dev, NULL, 'e' FROM (SELECT DISTINCT ON (dev) dev FROM test_ht ORDER BY dev NULLS FIRST) a;
+:PREFIX SELECT time, dev, NULL, 'f' FROM (SELECT DISTINCT ON (dev) dev, time FROM test_ht ORDER BY dev NULLS FIRST) a;
+-- ORDER BY
+:PREFIX SELECT time, dev, val, 'oba' FROM (SELECT DISTINCT ON (dev) * FROM test_ht ORDER BY dev, time) a;
+:PREFIX SELECT time, dev, val, 'obd' FROM (SELECT DISTINCT ON (dev) * FROM test_ht ORDER BY dev DESC, time DESC) a;
+-- WHERE CLAUSES
+:PREFIX SELECT time, dev, val, 'g' FROM (SELECT DISTINCT ON (dev) * FROM test_ht WHERE dev > 5) a;
+:PREFIX SELECT time, dev, val, 'h' FROM (SELECT DISTINCT ON (dev) * FROM test_ht WHERE time > 5) a;
+:PREFIX SELECT time, dev, val, 'i' FROM (SELECT DISTINCT ON (dev) * FROM test_ht WHERE val > 5) a;
+:PREFIX SELECT NULL, dev, NULL, 'j' FROM (SELECT DISTINCT ON (dev) dev FROM test_ht WHERE dev > 5) a;
+:PREFIX SELECT NULL, dev, NULL, 'k' FROM (SELECT DISTINCT ON (dev) dev FROM test_ht WHERE time > 5) a;
+:PREFIX SELECT NULL, dev, NULL, 'l' FROM (SELECT DISTINCT ON (dev) dev FROM test_ht WHERE val > 5) a;
+:PREFIX SELECT time, dev, val, 'm' FROM (SELECT DISTINCT ON (dev) * FROM test_ht WHERE dev != 5) a;
+:PREFIX SELECT time, dev, val, 'n' FROM (SELECT DISTINCT ON (dev) * FROM test_ht WHERE time != 5) a;
+:PREFIX SELECT time, dev, val, 'o' FROM (SELECT DISTINCT ON (dev) * FROM test_ht WHERE val != 5) a;
+:PREFIX SELECT time, dev, val, 'p' FROM (SELECT DISTINCT ON (dev) * FROM test_ht WHERE dev >= 1 + 1) a;
+-- ReScan tests
+:PREFIX SELECT time, dev, val, 'q' FROM (SELECT DISTINCT ON (dev) * FROM (
+    VALUES (1), (2)) a(v),
+    LATERAL (SELECT * FROM test_ht WHERE time != a.v) b) a;
+:PREFIX SELECT time, dev, val, 'r' FROM (SELECT * FROM (
+    VALUES (1), (2)) a(v),
+    LATERAL (SELECT DISTINCT ON (dev) * FROM test_ht WHERE dev != a.v) b) a;
+-- RuntimeKeys
+:PREFIX SELECT time, dev, val, 's' FROM (SELECT * FROM (
+    VALUES (1), (2)) a(v),
+    LATERAL (SELECT DISTINCT ON (dev) * FROM test_ht WHERE dev >= a.v) b) c;
+-- SkipSkan on later keys of an index
+:PREFIX SELECT time, NULL, NULL, 't' FROM (SELECT DISTINCT ON (time) time FROM test_ht WHERE dev = 2) a;
+:PREFIX SELECT time, dev, val, 'u' FROM (SELECT DISTINCT ON (time) * FROM test_ht WHERE dev = 2) a;
+-- Emulate multi-column DISTINCT using multiple SkipSkans
+:PREFIX SELECT time, dev, val, 'v' FROM (SELECT b.* FROM
+    (SELECT DISTINCT ON (dev) dev FROM test_ht) a,
+    LATERAL (SELECT DISTINCT ON (time) * FROM test_ht WHERE dev = a.dev) b) c;
+:PREFIX SELECT time, dev, NULL, 'w' FROM (SELECT b.* FROM
+    (SELECT DISTINCT ON (dev) dev FROM test_ht) a,
+    LATERAL (SELECT DISTINCT ON (time) dev, time FROM test_ht WHERE dev = a.dev) b) c;
+SET timescaledb.enable_skipscan TO false;
+\set PREFIX 'INSERT INTO base_results(time, dev, val, test)'
+\ir include/skip_scan_test_query.sql
+-- This file and its contents are licensed under the Timescale License.
+-- Please see the included NOTICE for copyright information and
+-- LICENSE-TIMESCALE for a copy of the license.
+-- SkipSkan over IndexScan
+:PREFIX SELECT time, dev, val, 'a' FROM (SELECT DISTINCT ON (dev) * FROM test_table) a;
+-- SkipSkan over IndexOnlyScan
+:PREFIX SELECT NULL, dev, NULL, 'b' FROM (SELECT DISTINCT ON (dev) dev FROM test_table) a;
+:PREFIX SELECT time, dev, NULL, 'c' FROM (SELECT DISTINCT ON (dev) dev, time FROM test_table) a;
+-- SkipSkan with NULLS FIRST
+:PREFIX SELECT time, dev, val, 'd' FROM (SELECT DISTINCT ON (dev) * FROM test_table ORDER BY dev NULLS FIRST) a;
+:PREFIX SELECT NULL, dev, NULL, 'e' FROM (SELECT DISTINCT ON (dev) dev FROM test_table ORDER BY dev NULLS FIRST) a;
+:PREFIX SELECT time, dev, NULL, 'f' FROM (SELECT DISTINCT ON (dev) dev, time FROM test_table ORDER BY dev NULLS FIRST) a;
+-- ORDER BY
+:PREFIX SELECT time, dev, val, 'oba' FROM (SELECT DISTINCT ON (dev) * FROM test_table ORDER BY dev, time) a;
+:PREFIX SELECT time, dev, val, 'obd' FROM (SELECT DISTINCT ON (dev) * FROM test_table ORDER BY dev DESC, time DESC) a;
+-- WHERE CLAUSES
+:PREFIX SELECT time, dev, val, 'g' FROM (SELECT DISTINCT ON (dev) * FROM test_table WHERE dev > 5) a;
+:PREFIX SELECT time, dev, val, 'h' FROM (SELECT DISTINCT ON (dev) * FROM test_table WHERE time > 5) a;
+:PREFIX SELECT time, dev, val, 'i' FROM (SELECT DISTINCT ON (dev) * FROM test_table WHERE val > 5) a;
+:PREFIX SELECT NULL, dev, NULL, 'j' FROM (SELECT DISTINCT ON (dev) dev FROM test_table WHERE dev > 5) a;
+:PREFIX SELECT NULL, dev, NULL, 'k' FROM (SELECT DISTINCT ON (dev) dev FROM test_table WHERE time > 5) a;
+:PREFIX SELECT NULL, dev, NULL, 'l' FROM (SELECT DISTINCT ON (dev) dev FROM test_table WHERE val > 5) a;
+:PREFIX SELECT time, dev, val, 'm' FROM (SELECT DISTINCT ON (dev) * FROM test_table WHERE dev != 5) a;
+:PREFIX SELECT time, dev, val, 'n' FROM (SELECT DISTINCT ON (dev) * FROM test_table WHERE time != 5) a;
+:PREFIX SELECT time, dev, val, 'o' FROM (SELECT DISTINCT ON (dev) * FROM test_table WHERE val != 5) a;
+:PREFIX SELECT time, dev, val, 'p' FROM (SELECT DISTINCT ON (dev) * FROM test_table WHERE dev >= 1 + 1) a;
+-- ReScan tests
+:PREFIX SELECT time, dev, val, 'q' FROM (SELECT DISTINCT ON (dev) * FROM (
+    VALUES (1), (2)) a(v),
+    LATERAL (SELECT * FROM test_table WHERE time != a.v) b) a;
+:PREFIX SELECT time, dev, val, 'r' FROM (SELECT * FROM (
+    VALUES (1), (2)) a(v),
+    LATERAL (SELECT DISTINCT ON (dev) * FROM test_table WHERE dev != a.v) b) a;
+-- RuntimeKeys
+:PREFIX SELECT time, dev, val, 's' FROM (SELECT * FROM (
+    VALUES (1), (2)) a(v),
+    LATERAL (SELECT DISTINCT ON (dev) * FROM test_table WHERE dev >= a.v) b) c;
+-- SkipSkan on later keys of an index
+:PREFIX SELECT time, NULL, NULL, 't' FROM (SELECT DISTINCT ON (time) time FROM test_table WHERE dev = 2) a;
+:PREFIX SELECT time, dev, val, 'u' FROM (SELECT DISTINCT ON (time) * FROM test_table WHERE dev = 2) a;
+-- Emulate multi-column DISTINCT using multiple SkipSkans
+:PREFIX SELECT time, dev, val, 'v' FROM (SELECT b.* FROM
+    (SELECT DISTINCT ON (dev) dev FROM test_table) a,
+    LATERAL (SELECT DISTINCT ON (time) * FROM test_table WHERE dev = a.dev) b) c;
+:PREFIX SELECT time, dev, NULL, 'w' FROM (SELECT b.* FROM
+    (SELECT DISTINCT ON (dev) dev FROM test_table) a,
+    LATERAL (SELECT DISTINCT ON (time) dev, time FROM test_table WHERE dev = a.dev) b) c;
+--------------------------
+--------------------------
+---- hypertable tests ----
+--------------------------
+--------------------------
+-- SkipSkan over IndexScan
+:PREFIX SELECT time, dev, val, 'a' FROM (SELECT DISTINCT ON (dev) * FROM test_ht) a;
+-- SkipSkan over IndexOnlyScan
+:PREFIX SELECT NULL, dev, NULL, 'b' FROM (SELECT DISTINCT ON (dev) dev FROM test_ht) a;
+:PREFIX SELECT time, dev, NULL, 'c' FROM (SELECT DISTINCT ON (dev) dev, time FROM test_ht) a;
+-- SkipSkan with NULLS FIRST
+:PREFIX SELECT time, dev, val, 'd' FROM (SELECT DISTINCT ON (dev) * FROM test_ht ORDER BY dev NULLS FIRST) a;
+:PREFIX SELECT NULL, dev, NULL, 'e' FROM (SELECT DISTINCT ON (dev) dev FROM test_ht ORDER BY dev NULLS FIRST) a;
+:PREFIX SELECT time, dev, NULL, 'f' FROM (SELECT DISTINCT ON (dev) dev, time FROM test_ht ORDER BY dev NULLS FIRST) a;
+-- ORDER BY
+:PREFIX SELECT time, dev, val, 'oba' FROM (SELECT DISTINCT ON (dev) * FROM test_ht ORDER BY dev, time) a;
+:PREFIX SELECT time, dev, val, 'obd' FROM (SELECT DISTINCT ON (dev) * FROM test_ht ORDER BY dev DESC, time DESC) a;
+-- WHERE CLAUSES
+:PREFIX SELECT time, dev, val, 'g' FROM (SELECT DISTINCT ON (dev) * FROM test_ht WHERE dev > 5) a;
+:PREFIX SELECT time, dev, val, 'h' FROM (SELECT DISTINCT ON (dev) * FROM test_ht WHERE time > 5) a;
+:PREFIX SELECT time, dev, val, 'i' FROM (SELECT DISTINCT ON (dev) * FROM test_ht WHERE val > 5) a;
+:PREFIX SELECT NULL, dev, NULL, 'j' FROM (SELECT DISTINCT ON (dev) dev FROM test_ht WHERE dev > 5) a;
+:PREFIX SELECT NULL, dev, NULL, 'k' FROM (SELECT DISTINCT ON (dev) dev FROM test_ht WHERE time > 5) a;
+:PREFIX SELECT NULL, dev, NULL, 'l' FROM (SELECT DISTINCT ON (dev) dev FROM test_ht WHERE val > 5) a;
+:PREFIX SELECT time, dev, val, 'm' FROM (SELECT DISTINCT ON (dev) * FROM test_ht WHERE dev != 5) a;
+:PREFIX SELECT time, dev, val, 'n' FROM (SELECT DISTINCT ON (dev) * FROM test_ht WHERE time != 5) a;
+:PREFIX SELECT time, dev, val, 'o' FROM (SELECT DISTINCT ON (dev) * FROM test_ht WHERE val != 5) a;
+:PREFIX SELECT time, dev, val, 'p' FROM (SELECT DISTINCT ON (dev) * FROM test_ht WHERE dev >= 1 + 1) a;
+-- ReScan tests
+:PREFIX SELECT time, dev, val, 'q' FROM (SELECT DISTINCT ON (dev) * FROM (
+    VALUES (1), (2)) a(v),
+    LATERAL (SELECT * FROM test_ht WHERE time != a.v) b) a;
+:PREFIX SELECT time, dev, val, 'r' FROM (SELECT * FROM (
+    VALUES (1), (2)) a(v),
+    LATERAL (SELECT DISTINCT ON (dev) * FROM test_ht WHERE dev != a.v) b) a;
+-- RuntimeKeys
+:PREFIX SELECT time, dev, val, 's' FROM (SELECT * FROM (
+    VALUES (1), (2)) a(v),
+    LATERAL (SELECT DISTINCT ON (dev) * FROM test_ht WHERE dev >= a.v) b) c;
+-- SkipSkan on later keys of an index
+:PREFIX SELECT time, NULL, NULL, 't' FROM (SELECT DISTINCT ON (time) time FROM test_ht WHERE dev = 2) a;
+:PREFIX SELECT time, dev, val, 'u' FROM (SELECT DISTINCT ON (time) * FROM test_ht WHERE dev = 2) a;
+-- Emulate multi-column DISTINCT using multiple SkipSkans
+:PREFIX SELECT time, dev, val, 'v' FROM (SELECT b.* FROM
+    (SELECT DISTINCT ON (dev) dev FROM test_ht) a,
+    LATERAL (SELECT DISTINCT ON (time) * FROM test_ht WHERE dev = a.dev) b) c;
+:PREFIX SELECT time, dev, NULL, 'w' FROM (SELECT b.* FROM
+    (SELECT DISTINCT ON (dev) dev FROM test_ht) a,
+    LATERAL (SELECT DISTINCT ON (time) dev, time FROM test_ht WHERE dev = a.dev) b) c;
+-- Test that the multi-column DISTINCT emulation is equivalent to a real multi-column DISTINCT
+SELECT count(*) FROM
+   (SELECT DISTINCT ON (dev) dev FROM test_table) a,
+   LATERAL (SELECT DISTINCT ON (time) dev, time FROM test_table WHERE dev = a.dev) b;
+ count 
+-------
+ 10001
+(1 row)
+
+SELECT count(*) FROM (SELECT DISTINCT ON (dev, time) dev, time FROM test_table WHERE dev IS NOT NULL) c;
+ count 
+-------
+ 10001
+(1 row)
+
+SELECT count(*) FROM (
+   SELECT DISTINCT ON (dev, time) dev, time FROM test_table WHERE dev IS NOT NULL
+   UNION SELECT b.* FROM
+      (SELECT DISTINCT ON (dev) dev FROM test_table) a,
+      LATERAL (SELECT DISTINCT ON (time) dev, time FROM test_table WHERE dev = a.dev) b
+) u;
+ count 
+-------
+ 10001
+(1 row)
+
+-- Check that the SkipScan results are identical to the regular results
+SELECT (skip_scan_results).* skip_scan, (base_results).* base
+FROM skip_scan_results FULL JOIN base_results ON skip_scan_results.idx = base_results.idx
+WHERE skip_scan_results.time != base_results.time
+   OR (skip_scan_results.time IS NULL != (base_results.time IS NULL))
+   OR skip_scan_results.dev != base_results.dev
+   OR (skip_scan_results.dev IS NULL != (base_results.dev IS NULL))
+   OR skip_scan_results.val != base_results.val
+   OR (skip_scan_results.val IS NULL != (base_results.val IS NULL))
+ORDER BY skip_scan_results.idx, base_results.idx;
+ idx | time | dev | val | test | idx | time | dev | val | test 
+-----+------+-----+-----+------+-----+------+-----+-----+------
+(0 rows)
+
