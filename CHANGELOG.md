@@ -4,10 +4,23 @@
 `psql` with the `-X` flag to prevent any `.psqlrc` commands from
 accidentally triggering the load of a previous DB version.**
 
-## Unreleased
+## 2.1.0 (2021-02-22)
+
+This release adds major new features since the 2.0.2 release.
+We deem it moderate priority for upgrading.
+
+This release adds the long-awaited support for PostgreSQL 13 to TimescaleDB.
+
+This release also relaxes some restrictions for compressed hypertables
+namely adding columns to compressed hypertables and renaming columns of
+compressed hypertables.
+
+**Major Features**
+* #2779 Add support for PostgreSQL 13
 
 **Minor features**
 * #2736 Support adding columns to hypertables with compression enabled
+* #2909 Support renaming columns of hypertables with compression enabled
 
 ## 2.0.2 (2021-02-19)
 
@@ -22,7 +35,6 @@ lot of invalidations.
 
 **Minor features**
 * #2926 Optimize cagg refresh for small invalidations
-* #2909 Support renaming columns of compression enabled hypertables.
 
 **Bugfixes**
 * #2850 Set status for backend in background jobs
