@@ -55,6 +55,7 @@
 #include <executor/nodeIndexonlyscan.h>
 #include <nodes/extensible.h>
 #include <nodes/pg_list.h>
+#include <storage/bufmgr.h>
 #include <utils/datum.h>
 
 #include "guc.h"
@@ -529,10 +530,11 @@ static void
 skip_scan_end(CustomScanState *node)
 {
 	SkipScanState *state = (SkipScanState *) node;
-	if (state->index_only_scan)
-		ExecEndIndexOnlyScan(castNode(IndexOnlyScanState, state->idx));
-	else
-		ExecEndIndexScan(castNode(IndexScanState, state->idx));
+
+	if (state->index_only_scan && BufferIsValid(*state->index_only_buffer))
+		ReleaseBuffer(*state->index_only_buffer);
+
+	ExecEndNode(&state->idx->ps);
 }
 
 static void
@@ -552,10 +554,7 @@ skip_scan_rescan(CustomScanState *node)
 	 */
 	skip_scan_state_readd_skip_qual_if_needed(state);
 
-	if (state->index_only_scan)
-		ExecReScanIndexOnlyScan(castNode(IndexOnlyScanState, state->idx));
-	else
-		ExecReScanIndexScan(castNode(IndexScanState, state->idx));
+	ExecReScan(&state->idx->ps);
 
 	state->prev_distinct_val = 0;
 	state->prev_is_null = true;

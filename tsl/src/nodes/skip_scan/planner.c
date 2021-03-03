@@ -107,7 +107,7 @@ skip_scan_plan_create(PlannerInfo *root, RelOptInfo *relopt, CustomPath *best_pa
 		idx_plan->indexqual = list_concat(fixed_skip_clauses, idx_plan->indexqual);
 	}
 	else
-		elog(ERROR, "bad subplan type fpr SkipScan: %d", plan->type);
+		elog(ERROR, "bad subplan type for SkipScan: %d", plan->type);
 
 	/* based on make_unique_from_pathkeys */
 	AttrNumber *distinct_columns =
@@ -115,7 +115,7 @@ skip_scan_plan_create(PlannerInfo *root, RelOptInfo *relopt, CustomPath *best_pa
 	if (distinct_columns == NULL)
 		elog(ERROR, "Invalid skip column in SkipScanPath; could not find in tlist");
 
-	skip_plan->custom_scan_tlist = plan->targetlist;
+	skip_plan->custom_scan_tlist = list_copy(plan->targetlist);
 	skip_plan->scan.plan.qual = NIL;
 	skip_plan->scan.plan.type = T_CustomScan;
 	skip_plan->scan.plan.parallel_safe = false;
@@ -186,7 +186,6 @@ ts_add_skip_scan_paths(PlannerInfo *root, RelOptInfo *output_rel)
 			// elog(WARNING, "cost %f", noop_unique_path->path.total_cost);
 			// noop_unique_path->path.total_cost *= n_distinct;
 			add_path(output_rel, &skip_scan_path->cpath.path);
-			return;
 		}
 		else if (IsA(unique_path->subpath, MergeAppendPath))
 		{
@@ -235,7 +234,6 @@ ts_add_skip_scan_paths(PlannerInfo *root, RelOptInfo *output_rel)
 			// FIXME
 			new_unique_path->path.total_cost = log2(new_unique_path->path.total_cost);
 			add_path(output_rel, &new_unique_path->path);
-			return;
 		}
 	}
 }
@@ -261,7 +259,7 @@ create_index_skip_scan_path(PlannerInfo *root, UpperUniquePath *unique_path, Ind
 		skip_scan_path->cpath.path = unique_path->path;
 	skip_scan_path->cpath.path.type = T_CustomPath;
 	skip_scan_path->cpath.path.pathtype = T_CustomScan;
-	// skip_scan_path->cpath.custom_paths = list_make1(index_path);
+	skip_scan_path->cpath.custom_paths = list_make1(index_path);
 	skip_scan_path->cpath.methods = &skip_scan_path_methods;
 	skip_scan_path->index_path = index_path;
 	Assert(unique_path->numkeys <= index_path->indexinfo->nkeycolumns);
